@@ -18,11 +18,6 @@ if (jwtSecret.length < 32) {
   jwtSecret = 'development-only-secret-do-not-use-in-production';
 }
 
-const resolvePath = (value, fallback) => {
-  const v = value || fallback;
-  return v === ':memory:' ? v : path.resolve(root, v);
-};
-
 const list = (v) => (v || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
 
 export const config = {
@@ -32,8 +27,8 @@ export const config = {
   jwtSecret,
   sessionDays: Number(env.SESSION_DAYS || 7),
   allowedDomain: (env.ALLOWED_EMAIL_DOMAIN || 'dypiu.ac.in').toLowerCase(),
-  dbPath: resolvePath(env.DB_PATH, './data/campus.db'),
-  uploadDir: resolvePath(env.UPLOAD_DIR, './uploads'),
+  databaseUrl: env.DATABASE_URL || 'postgresql://localhost:5432/campus_connect',
+  uploadDir: env.UPLOAD_DIR ? path.resolve(root, env.UPLOAD_DIR) : path.resolve(root, './uploads'),
   maxUploadMb: Number(env.MAX_UPLOAD_MB || 5),
   clientOrigin: env.CLIENT_ORIGIN || 'http://localhost:5173',
   clientDist: path.resolve(root, '../client/dist'),
@@ -45,5 +40,4 @@ export const config = {
   },
   mailFrom: env.MAIL_FROM || 'Campus Connect <no-reply@localhost>',
   adminEmails: list(env.ADMIN_EMAILS),
-  seedPassword: env.SEED_PASSWORD || '',
 };

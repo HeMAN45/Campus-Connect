@@ -20,8 +20,8 @@ export function attachSocket(server) {
   });
   setIo(io);
 
-  io.use((socket, next) => {
-    const user = userFromToken(readCookie(socket.handshake.headers.cookie, SESSION_COOKIE));
+  io.use(async (socket, next) => {
+    const user = await userFromToken(readCookie(socket.handshake.headers.cookie, SESSION_COOKIE));
     if (!user || user.status === 'suspended') return next(new Error('UNAUTHENTICATED'));
     socket.data.userId = user.id;
     next();
@@ -34,7 +34,7 @@ export function attachSocket(server) {
     let windowStart = Date.now();
     let count = 0;
 
-    socket.on('typing', (payload) => {
+    socket.on('typing', async (payload) => {
       try {
         const now = Date.now();
         if (now - windowStart > 1000) {
@@ -45,7 +45,7 @@ export function attachSocket(server) {
         const conversationId = Number(payload?.conversationId);
         if (!Number.isInteger(conversationId)) return;
         if (!peers.has(conversationId)) {
-          const cv = get('SELECT user_a_id, user_b_id FROM conversations WHERE id = ?', conversationId);
+          const cv = await get('SELECT user_a_id, user_b_id FROM conversations WHERE id = ?', conversationId);
           if (!cv || (cv.user_a_id !== me && cv.user_b_id !== me)) return;
           peers.set(conversationId, cv.user_a_id === me ? cv.user_b_id : cv.user_a_id);
         }
@@ -59,8 +59,12 @@ export function attachSocket(server) {
       }
     });
 
-    socket.on('disconnect', () => {
-      run('UPDATE users SET last_seen_at = ? WHERE id = ?', nowIso(), me);
+    socket.on('disconnect', async () => {
+      try {
+        await run('UPDATE users SET last_seen_at = ? WHERE id = ?', nowIso(), me);
+      } catch {
+        // Best-effort.
+      }
     });
   });
 

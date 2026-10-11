@@ -54,8 +54,8 @@ const feedQuery = z.object({
   limit: optInt(1, 50),
 });
 
-function loadPostRow(id, user) {
-  const row = get('SELECT * FROM posts WHERE id = ? AND deleted_at IS NULL', id);
+async function loadPostRow(id, user) {
+  const row = await get('SELECT * FROM posts WHERE id = ? AND deleted_at IS NULL', id);
   if (!row) throw notFound('This post was removed or does not exist.');
   if (row.is_hidden && row.author_id !== user.id && !isAdmin(user)) throw notFound('This post is under review.');
   return row;
@@ -67,7 +67,7 @@ const postId = (req) => {
   return id;
 };
 
-r.get('/', (req, res) => {
+r.get('/', async (req, res) => {
   const q = parse(feedQuery, req.query);
   const pageSize = q.limit || 20;
   const nowStr = nowIso();
@@ -93,7 +93,7 @@ r.get('/', (req, res) => {
     params.push(q.authorId);
   }
   if (q.subject) {
-    where.push('p.subject_tag = ? COLLATE NOCASE');
+    where.push('LOWER(p.subject_tag) = LOWER(?)');
     params.push(q.subject);
   }
   if (q.unanswered) where.push('p.comment_count = 0 AND p.accepted_comment_id IS NULL');
@@ -107,7 +107,6 @@ r.get('/', (req, res) => {
     params.push(nowStr);
   }
 
-  // Active pins are shown in their own block on the first page, so they are excluded from the list.
   const showPins = ['all', 'announcements'].includes(q.tab) && !q.authorId;
   const pinScope = q.communityId ? 'p.community_id = ?' : 'p.community_id IS NULL';
   const pinParams = q.communityId ? [q.communityId] : [];
@@ -118,7 +117,7 @@ r.get('/', (req, res) => {
 
   let pinned = [];
   if (showPins && !q.cursor) {
-    pinned = all(
+    pinned = await all(
       `${POST_SELECT} WHERE p.deleted_at IS NULL AND p.is_hidden = 0 AND p.is_pinned = 1
          AND (p.pinned_until IS NULL OR p.pinned_until > ?) AND ${pinScope}
        ORDER BY p.created_at DESC LIMIT 3`,
@@ -138,7 +137,7 @@ r.get('/', (req, res) => {
       sql += ' AND (p.created_at < ? OR (p.created_at = ? AND p.id < ?))';
       ps.push(cursor.c, cursor.c, cursor.i);
     }
-    rows = all(`${sql} ORDER BY p.created_at DESC, p.id DESC LIMIT ?`, ...ps, pageSize + 1);
+    rows = await all(`${sql} ORDER BY p.created_at DESC, p.id DESC LIMIT ?`, ...ps, pageSize + 1);
     if (rows.length > pageSize) {
       rows = rows.slice(0, pageSize);
       const last = rows.at(-1);
@@ -148,13 +147,13 @@ r.get('/', (req, res) => {
     const offset = Number(cursor?.o) || 0;
     if (eventsByTime) {
       const dir = q.when === 'upcoming' ? 'ASC' : 'DESC';
-      rows = all(`${base} ORDER BY p.event_starts_at ${dir}, p.id LIMIT ? OFFSET ?`, ...params, pageSize + 1, offset);
+      rows = await all(`${base} ORDER BY p.event_starts_at ${dir}, p.id LIMIT ? OFFSET ?`, ...params, pageSize + 1, offset);
     } else if (q.sort === 'top') {
       const weekAgo = new Date(Date.now() - 7 * 86_400_000).toISOString();
-      rows = all(`${base} AND p.created_at >= ? ORDER BY p.score DESC, p.id DESC LIMIT ? OFFSET ?`, ...params, weekAgo, pageSize + 1, offset);
+      rows = await all(`${base} AND p.created_at >= ? ORDER BY p.score DESC, p.id DESC LIMIT ? OFFSET ?`, ...params, weekAgo, pageSize + 1, offset);
     } else {
       const now = Date.now();
-      const candidates = all(`${base} ORDER BY p.created_at DESC LIMIT 500`, ...params);
+      const candidates = await all(`${base} ORDER BY p.created_at DESC LIMIT 500`, ...params);
       for (const c of candidates) c.hot = hotScore(c, now);
       candidates.sort((a, b) => b.hot - a.hot);
       rows = candidates.slice(offset, offset + pageSize + 1);
@@ -165,36 +164,36 @@ r.get('/', (req, res) => {
     }
   }
 
-  res.json({ pinned: hydratePosts(pinned, req.user), items: hydratePosts(rows, req.user), nextCursor });
+  res.json({ pinned: await hydratePosts(pinned, req.user), items: await hydratePosts(rows, req.user), nextCursor });
 });
 
-r.get('/upcoming-events', (req, res) => {
+r.get('/upcoming-events', async (req, res) => {
   const n = Math.min(Number(req.query.limit) || 5, 10);
-  const rows = all(
+  const rows = await all(
     `${POST_SELECT} WHERE p.type = 'event' AND p.deleted_at IS NULL AND p.is_hidden = 0 AND c.status = 'active'
        AND coalesce(p.event_ends_at, p.event_starts_at) >= ?
      ORDER BY p.event_starts_at ASC LIMIT ?`,
     nowIso(),
     n,
   );
-  res.json({ items: hydratePosts(rows, req.user) });
+  res.json({ items: await hydratePosts(rows, req.user) });
 });
 
-r.get('/pinned', (req, res) => {
-  const rows = all(
+r.get('/pinned', async (req, res) => {
+  const rows = await all(
     `${POST_SELECT} WHERE p.deleted_at IS NULL AND p.is_hidden = 0 AND p.is_pinned = 1 AND p.community_id IS NULL
        AND (p.pinned_until IS NULL OR p.pinned_until > ?)
      ORDER BY p.created_at DESC LIMIT 3`,
     nowIso(),
   );
-  res.json({ items: hydratePosts(rows, req.user) });
+  res.json({ items: await hydratePosts(rows, req.user) });
 });
 
-r.get('/subjects', (req, res) => {
-  const rows = all(
-    `SELECT subject_tag AS tag, count(*) AS n FROM posts
+r.get('/subjects', async (req, res) => {
+  const rows = await all(
+    `SELECT LOWER(subject_tag) AS tag, count(*) AS n FROM posts
      WHERE type = 'doubt' AND deleted_at IS NULL AND subject_tag IS NOT NULL
-     GROUP BY subject_tag COLLATE NOCASE ORDER BY n DESC LIMIT 20`,
+     GROUP BY LOWER(subject_tag) ORDER BY n DESC LIMIT 20`,
   );
   res.json({ items: rows });
 });
@@ -246,27 +245,27 @@ const createSchema = z
 
 const iso = (v) => (v ? new Date(v).toISOString() : null);
 
-function membersOf(communityId) {
-  return all('SELECT user_id FROM community_members WHERE community_id = ?', communityId).map((m) => m.user_id);
+async function membersOf(communityId) {
+  return (await all('SELECT user_id FROM community_members WHERE community_id = ?', communityId)).map((m) => m.user_id);
 }
 
-r.post('/', limit('post-create', 10, HOUR), uploadImages('images', 4), (req, res) => {
+r.post('/', limit('post-create', 10, HOUR), uploadImages('images', 4), async (req, res) => {
   const b = parse(createSchema, req.body);
-  const community = b.communityId ? get('SELECT * FROM communities WHERE id = ?', b.communityId) : null;
+  const community = b.communityId ? await get('SELECT * FROM communities WHERE id = ?', b.communityId) : null;
   if (b.communityId && !community) throw notFound('Community not found.');
-  assertCanCreatePost(req.user, b.type, community);
+  await assertCanCreatePost(req.user, b.type, community);
 
   const wantsPin = !!(
     b.pinned &&
     b.type === 'announcement' &&
-    (isAdmin(req.user) || (community ? isCommunityMod(community.id, req.user) : isVerifiedTeacher(req.user)))
+    (isAdmin(req.user) || (community ? await isCommunityMod(community.id, req.user) : isVerifiedTeacher(req.user)))
   );
   const pinnedUntil = wantsPin && !community ? new Date(Date.now() + 7 * 86_400_000).toISOString() : null;
   const images = (req.files || []).map((f, i) => ({ ...saveImage(req, f, 'posts'), alt: b.imageAlts?.[i] || null }));
   const t = b.type;
 
-  const id = tx(() => {
-    const { id } = run(
+  const id = await tx(async () => {
+    const { id } = await run(
       `INSERT INTO posts (author_id, community_id, type, title, body, subject_tag, needed_by, item_location, item_date,
          event_starts_at, event_ends_at, event_venue, event_url, is_pinned, pinned_until, comments_locked)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -287,8 +286,9 @@ r.post('/', limit('post-create', 10, HOUR), uploadImages('images', 4), (req, res
       pinnedUntil,
       t === 'announcement' && !!b.commentsLocked,
     );
-    images.forEach((im, i) =>
-      run(
+    for (let i = 0; i < images.length; i++) {
+      const im = images[i];
+      await run(
         'INSERT INTO post_images (post_id, url, alt_text, width, height, bytes, position) VALUES (?, ?, ?, ?, ?, ?, ?)',
         id,
         im.url,
@@ -297,74 +297,74 @@ r.post('/', limit('post-create', 10, HOUR), uploadImages('images', 4), (req, res
         im.height ?? null,
         im.bytes,
         i,
-      ),
-    );
+      );
+    }
     return id;
   });
   keepUploads(req);
 
   if (t === 'announcement' && !community) {
-    const everyone = all("SELECT id FROM users WHERE status <> 'suspended'").map((u) => u.id);
-    notify(everyone, { type: 'announcement', actorId: req.user.id, postId: id });
+    const everyone = (await all("SELECT id FROM users WHERE status <> 'suspended'")).map((u) => u.id);
+    await notify(everyone, { type: 'announcement', actorId: req.user.id, postId: id });
   } else if (t === 'announcement') {
-    notify(membersOf(community.id), { type: 'community_announcement', actorId: req.user.id, postId: id, communityId: community.id });
+    await notify(await membersOf(community.id), { type: 'community_announcement', actorId: req.user.id, postId: id, communityId: community.id });
   } else if (t === 'event') {
-    notify(membersOf(community.id), { type: 'community_event', actorId: req.user.id, postId: id, communityId: community.id });
+    await notify(await membersOf(community.id), { type: 'community_event', actorId: req.user.id, postId: id, communityId: community.id });
   }
 
-  res.status(201).json({ post: loadPost(id, req.user) });
+  res.status(201).json({ post: await loadPost(id, req.user) });
 });
 
-r.get('/:id', (req, res) => {
-  const row = loadPostRow(postId(req), req.user);
+r.get('/:id', async (req, res) => {
+  const row = await loadPostRow(postId(req), req.user);
   const owner = row.author_id === req.user.id;
-  const role = row.community_id ? memberRole(row.community_id, req.user.id) : null;
+  const role = row.community_id ? await memberRole(row.community_id, req.user.id) : null;
   res.json({
-    post: loadPost(row.id, req.user),
+    post: await loadPost(row.id, req.user),
     viewer: {
       isOwner: owner,
       isMember: row.community_id ? !!role : null,
-      canModerate: canModerate(row, req.user),
-      canPin: canPin(row, req.user),
+      canModerate: await canModerate(row, req.user),
+      canPin: await canPin(row, req.user),
       canEdit: isAdmin(req.user) || (owner && Date.now() - Date.parse(row.created_at) < 86_400_000),
-      canDelete: owner || canModerate(row, req.user),
-      canSeeRsvps: row.type === 'event' && (owner || canModerate(row, req.user)),
+      canDelete: owner || (await canModerate(row, req.user)),
+      canSeeRsvps: row.type === 'event' && (owner || (await canModerate(row, req.user))),
     },
   });
 });
 
-r.patch('/:id', (req, res) => {
-  const row = loadPostRow(postId(req), req.user);
+r.patch('/:id', async (req, res) => {
+  const row = await loadPostRow(postId(req), req.user);
   const owner = row.author_id === req.user.id;
   if (!isAdmin(req.user) && !owner) throw forbidden();
   if (!isAdmin(req.user) && Date.now() - Date.parse(row.created_at) > 86_400_000) {
     throw forbidden('Posts can be edited for 24 hours after posting.');
   }
   const b = parse(z.object({ title: str(3, 150), body: optStr(5000) }), req.body);
-  run('UPDATE posts SET title = ?, body = ?, edited_at = ? WHERE id = ?', b.title, b.body || '', nowIso(), row.id);
-  res.json({ post: loadPost(row.id, req.user) });
+  await run('UPDATE posts SET title = ?, body = ?, edited_at = ? WHERE id = ?', b.title, b.body || '', nowIso(), row.id);
+  res.json({ post: await loadPost(row.id, req.user) });
 });
 
-r.delete('/:id', (req, res) => {
-  const row = loadPostRow(postId(req), req.user);
+r.delete('/:id', async (req, res) => {
+  const row = await loadPostRow(postId(req), req.user);
   const owner = row.author_id === req.user.id;
-  if (!owner && !canModerate(row, req.user)) throw forbidden();
-  run('UPDATE posts SET deleted_at = ?, is_pinned = 0 WHERE id = ?', nowIso(), row.id);
-  if (!owner) notify([row.author_id], { type: 'content_removed', actorId: req.user.id, data: { title: row.title, kind: 'post' } });
+  if (!owner && !(await canModerate(row, req.user))) throw forbidden();
+  await run('UPDATE posts SET deleted_at = ?, is_pinned = 0 WHERE id = ?', nowIso(), row.id);
+  if (!owner) await notify([row.author_id], { type: 'content_removed', actorId: req.user.id, data: { title: row.title, kind: 'post' } });
   res.status(204).end();
 });
 
 const voteSchema = z.object({ value: z.union([z.literal(1), z.literal(-1), z.literal(0)]) });
 
-r.post('/:id/vote', limit('vote', 300, HOUR), (req, res) => {
-  const row = loadPostRow(postId(req), req.user);
+r.post('/:id/vote', limit('vote', 300, HOUR), async (req, res) => {
+  const row = await loadPostRow(postId(req), req.user);
   if (row.author_id === req.user.id) throw forbidden("You can't vote on your own post.");
   const { value } = parse(voteSchema, req.body);
-  const score = tx(() => {
-    const old = get('SELECT value FROM post_votes WHERE post_id = ? AND user_id = ?', row.id, req.user.id)?.value || 0;
-    if (value === 0) run('DELETE FROM post_votes WHERE post_id = ? AND user_id = ?', row.id, req.user.id);
+  const score = await tx(async () => {
+    const old = (await get('SELECT value FROM post_votes WHERE post_id = ? AND user_id = ?', row.id, req.user.id))?.value || 0;
+    if (value === 0) await run('DELETE FROM post_votes WHERE post_id = ? AND user_id = ?', row.id, req.user.id);
     else {
-      run(
+      await run(
         `INSERT INTO post_votes (post_id, user_id, value) VALUES (?, ?, ?)
          ON CONFLICT(post_id, user_id) DO UPDATE SET value = excluded.value`,
         row.id,
@@ -372,37 +372,37 @@ r.post('/:id/vote', limit('vote', 300, HOUR), (req, res) => {
         value,
       );
     }
-    run('UPDATE posts SET score = score + ? WHERE id = ?', value - old, row.id);
-    return get('SELECT score FROM posts WHERE id = ?', row.id).score;
+    await run('UPDATE posts SET score = score + ? WHERE id = ?', value - old, row.id);
+    return (await get('SELECT score FROM posts WHERE id = ?', row.id)).score;
   });
   res.json({ score, myVote: value });
 });
 
-r.post('/:id/resolve', (req, res) => {
-  const row = loadPostRow(postId(req), req.user);
+r.post('/:id/resolve', async (req, res) => {
+  const row = await loadPostRow(postId(req), req.user);
   if (row.author_id !== req.user.id && !isAdmin(req.user)) throw forbidden('Only the author can change this.');
   if (!RESOLVABLE.has(row.type) || row.type === 'doubt') throw badRequest('This post type cannot be resolved.');
   const { resolved } = parse(z.object({ resolved: z.boolean() }), req.body);
-  run(
+  await run(
     'UPDATE posts SET status = ?, resolved_at = ? WHERE id = ?',
     resolved ? 'resolved' : 'open',
     resolved ? nowIso() : null,
     row.id,
   );
-  res.json({ post: loadPost(row.id, req.user) });
+  res.json({ post: await loadPost(row.id, req.user) });
 });
 
-r.post('/:id/accept', (req, res) => {
-  const row = loadPostRow(postId(req), req.user);
+r.post('/:id/accept', async (req, res) => {
+  const row = await loadPostRow(postId(req), req.user);
   if (row.type !== 'doubt') throw badRequest('Only doubts have accepted answers.');
   if (row.author_id !== req.user.id) throw forbidden('Only the person who asked can accept an answer.');
   const { commentId } = parse(z.object({ commentId: z.number().int().positive().nullable() }), req.body);
   let comment = null;
   if (commentId) {
-    comment = get('SELECT * FROM comments WHERE id = ? AND post_id = ? AND deleted_at IS NULL', commentId, row.id);
+    comment = await get('SELECT * FROM comments WHERE id = ? AND post_id = ? AND deleted_at IS NULL', commentId, row.id);
     if (!comment) throw notFound('That answer no longer exists.');
   }
-  run(
+  await run(
     'UPDATE posts SET accepted_comment_id = ?, status = ?, resolved_at = ? WHERE id = ?',
     commentId,
     commentId ? 'resolved' : 'open',
@@ -410,55 +410,55 @@ r.post('/:id/accept', (req, res) => {
     row.id,
   );
   if (comment && comment.author_id !== req.user.id && comment.id !== row.accepted_comment_id) {
-    notify([comment.author_id], { type: 'answer_accepted', actorId: req.user.id, postId: row.id, commentId: comment.id });
+    await notify([comment.author_id], { type: 'answer_accepted', actorId: req.user.id, postId: row.id, commentId: comment.id });
   }
-  res.json({ post: loadPost(row.id, req.user) });
+  res.json({ post: await loadPost(row.id, req.user) });
 });
 
-r.post('/:id/pin', (req, res) => {
-  const row = loadPostRow(postId(req), req.user);
-  if (!canPin(row, req.user)) throw forbidden();
+r.post('/:id/pin', async (req, res) => {
+  const row = await loadPostRow(postId(req), req.user);
+  if (!(await canPin(row, req.user))) throw forbidden();
   const { pinned } = parse(z.object({ pinned: z.boolean() }), req.body);
   const until = pinned && !row.community_id ? new Date(Date.now() + 7 * 86_400_000).toISOString() : null;
-  run('UPDATE posts SET is_pinned = ?, pinned_until = ? WHERE id = ?', pinned, until, row.id);
-  res.json({ post: loadPost(row.id, req.user) });
+  await run('UPDATE posts SET is_pinned = ?, pinned_until = ? WHERE id = ?', pinned, until, row.id);
+  res.json({ post: await loadPost(row.id, req.user) });
 });
 
-r.post('/:id/lock-comments', (req, res) => {
-  const row = loadPostRow(postId(req), req.user);
-  if (row.author_id !== req.user.id && !canModerate(row, req.user)) throw forbidden();
+r.post('/:id/lock-comments', async (req, res) => {
+  const row = await loadPostRow(postId(req), req.user);
+  if (row.author_id !== req.user.id && !(await canModerate(row, req.user))) throw forbidden();
   const { locked } = parse(z.object({ locked: z.boolean() }), req.body);
-  run('UPDATE posts SET comments_locked = ? WHERE id = ?', locked, row.id);
-  res.json({ post: loadPost(row.id, req.user) });
+  await run('UPDATE posts SET comments_locked = ? WHERE id = ?', locked, row.id);
+  res.json({ post: await loadPost(row.id, req.user) });
 });
 
-r.put('/:id/rsvp', limit('rsvp', 120, HOUR), (req, res) => {
-  const row = loadPostRow(postId(req), req.user);
+r.put('/:id/rsvp', limit('rsvp', 120, HOUR), async (req, res) => {
+  const row = await loadPostRow(postId(req), req.user);
   if (row.type !== 'event') throw badRequest('Only events take RSVPs.');
   const { status } = parse(z.object({ status: z.enum(['going', 'interested']).nullable() }), req.body);
-  tx(() => {
-    const old = get('SELECT status FROM event_rsvps WHERE post_id = ? AND user_id = ?', row.id, req.user.id)?.status || null;
+  await tx(async () => {
+    const old = (await get('SELECT status FROM event_rsvps WHERE post_id = ? AND user_id = ?', row.id, req.user.id))?.status || null;
     if (old === status) return;
     if (status) {
-      run(
+      await run(
         `INSERT INTO event_rsvps (post_id, user_id, status) VALUES (?, ?, ?)
-         ON CONFLICT(post_id, user_id) DO UPDATE SET status = excluded.status, updated_at = excluded.created_at`,
+         ON CONFLICT(post_id, user_id) DO UPDATE SET status = excluded.status, updated_at = NOW()`,
         row.id,
         req.user.id,
         status,
       );
     } else {
-      run('DELETE FROM event_rsvps WHERE post_id = ? AND user_id = ?', row.id, req.user.id);
+      await run('DELETE FROM event_rsvps WHERE post_id = ? AND user_id = ?', row.id, req.user.id);
     }
     const delta = (s) => (status === s ? 1 : 0) - (old === s ? 1 : 0);
-    run(
+    await run(
       'UPDATE posts SET going_count = going_count + ?, interested_count = interested_count + ? WHERE id = ?',
       delta('going'),
       delta('interested'),
       row.id,
     );
   });
-  const counts = get('SELECT going_count, interested_count FROM posts WHERE id = ?', row.id);
+  const counts = await get('SELECT going_count, interested_count FROM posts WHERE id = ?', row.id);
   res.json({ myRsvp: status, goingCount: counts.going_count, interestedCount: counts.interested_count });
 });
 
@@ -468,11 +468,11 @@ const csvCell = (v) => {
   return /[",\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 };
 
-r.get('/:id/rsvps', (req, res) => {
-  const row = loadPostRow(postId(req), req.user);
+r.get('/:id/rsvps', async (req, res) => {
+  const row = await loadPostRow(postId(req), req.user);
   if (row.type !== 'event') throw badRequest('Only events take RSVPs.');
-  if (row.author_id !== req.user.id && !canModerate(row, req.user)) throw forbidden();
-  const list = all(
+  if (row.author_id !== req.user.id && !(await canModerate(row, req.user))) throw forbidden();
+  const list = await all(
     `SELECT u.id, u.name, u.email, u.year, u.role, d.code AS dept, r.status, r.updated_at
      FROM event_rsvps r JOIN users u ON u.id = r.user_id LEFT JOIN departments d ON d.id = u.department_id
      WHERE r.post_id = ? ORDER BY r.status, u.name`,

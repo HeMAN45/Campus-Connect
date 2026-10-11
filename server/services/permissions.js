@@ -5,19 +5,19 @@ export const isAdmin = (u) => u.role === 'admin';
 export const isVerifiedTeacher = (u) => u.role === 'teacher' && u.status === 'active';
 export const isPendingTeacher = (u) => u.role === 'teacher' && u.status === 'pending';
 
-export const memberRole = (communityId, userId) =>
-  get('SELECT role FROM community_members WHERE community_id = ? AND user_id = ?', communityId, userId)?.role || null;
+export const memberRole = async (communityId, userId) =>
+  (await get('SELECT role FROM community_members WHERE community_id = ? AND user_id = ?', communityId, userId))?.role || null;
 
-export const isCommunityMod = (communityId, user) =>
-  isAdmin(user) || ['moderator', 'admin'].includes(memberRole(communityId, user.id));
+export const isCommunityMod = async (communityId, user) =>
+  isAdmin(user) || ['moderator', 'admin'].includes(await memberRole(communityId, user.id));
 
-export const isCommunityAdmin = (communityId, user) => isAdmin(user) || memberRole(communityId, user.id) === 'admin';
+export const isCommunityAdmin = async (communityId, user) => isAdmin(user) || (await memberRole(communityId, user.id)) === 'admin';
 
-export function permissionsFor(user) {
-  const modOf = all(
+export async function permissionsFor(user) {
+  const modOf = (await all(
     "SELECT community_id FROM community_members WHERE user_id = ? AND role IN ('moderator','admin')",
     user.id,
-  ).map((r) => r.community_id);
+  )).map((r) => r.community_id);
   return {
     isAdmin: isAdmin(user),
     isVerifiedTeacher: isVerifiedTeacher(user),
@@ -31,10 +31,10 @@ export function permissionsFor(user) {
 
 const pendingError = () => forbidden('Available after your faculty account is verified.', 'PENDING_APPROVAL');
 
-export function assertCanCreatePost(user, type, community) {
+export async function assertCanCreatePost(user, type, community) {
   if (community) {
     if (community.status !== 'active') throw notFound('Community not found.');
-    const role = memberRole(community.id, user.id);
+    const role = await memberRole(community.id, user.id);
     const mod = isAdmin(user) || role === 'moderator' || role === 'admin';
     if (!role && !isAdmin(user)) throw forbidden(`Join ${community.name} to post there.`, 'NOT_MEMBER');
     if (community.type === 'official' && !mod && !(type === 'announcement' && isVerifiedTeacher(user))) {
@@ -59,23 +59,23 @@ export function assertCanCreatePost(user, type, community) {
   }
 }
 
-export function canPin(post, user) {
+export async function canPin(post, user) {
   if (isAdmin(user)) return true;
   if (post.community_id) return isCommunityMod(post.community_id, user);
   return post.type === 'announcement' && post.author_id === user.id && isVerifiedTeacher(user);
 }
 
-export function canModerate(post, user) {
+export async function canModerate(post, user) {
   if (isAdmin(user)) return true;
   return post.community_id ? isCommunityMod(post.community_id, user) : false;
 }
 
-export function isBlockedBetween(a, b) {
-  return !!get(
+export async function isBlockedBetween(a, b) {
+  return !!(await get(
     'SELECT 1 FROM user_blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)',
     a,
     b,
     b,
     a,
-  );
+  ));
 }

@@ -1,6 +1,5 @@
 import { get, all, placeholders, parseJson, nowIso } from '../db/index.js';
 
-// Columns for a compact user, aliased with a prefix so they can sit next to other tables' columns.
 export const miniCols = (u, d, p) =>
   `${u}.id AS ${p}id, ${u}.name AS ${p}name, ${u}.avatar_url AS ${p}avatar_url, ${u}.role AS ${p}role, ` +
   `${u}.status AS ${p}status, ${u}.designation AS ${p}designation, ${u}.year AS ${p}year, ` +
@@ -22,14 +21,14 @@ export function miniFrom(row, p) {
   };
 }
 
-export const loadMini = (id) =>
+export const loadMini = async (id) =>
   miniFrom(
-    get(`SELECT ${miniCols('u', 'd', 'x_')} FROM users u LEFT JOIN departments d ON d.id = u.department_id WHERE u.id = ?`, id) || {},
+    (await get(`SELECT ${miniCols('u', 'd', 'x_')} FROM users u LEFT JOIN departments d ON d.id = u.department_id WHERE u.id = ?`, id)) || {},
     'x_',
   );
 
-export function userProfile(u, viewer) {
-  const dept = u.department_id ? get('SELECT id, code, name FROM departments WHERE id = ?', u.department_id) : null;
+export async function userProfile(u, viewer) {
+  const dept = u.department_id ? await get('SELECT id, code, name FROM departments WHERE id = ?', u.department_id) : null;
   const canSeePrivate = viewer && (viewer.id === u.id || viewer.role === 'admin');
   return {
     id: u.id,
@@ -71,23 +70,24 @@ export const POST_SELECT = `
   LEFT JOIN departments ud ON ud.id = u.department_id
   LEFT JOIN communities c ON c.id = p.community_id`;
 
-export function hydratePosts(rows, viewer) {
+export async function hydratePosts(rows, viewer) {
   if (!rows.length) return [];
   const ids = rows.map((r) => r.id);
   const ph = placeholders(ids.length);
   const images = new Map();
-  for (const im of all(`SELECT post_id, url, alt_text, width, height FROM post_images WHERE post_id IN (${ph}) ORDER BY post_id, position`, ...ids)) {
+  for (const im of await all(`SELECT post_id, url, alt_text, width, height FROM post_images WHERE post_id IN (${ph}) ORDER BY post_id, position`, ...ids)) {
     if (!images.has(im.post_id)) images.set(im.post_id, []);
     images.get(im.post_id).push({ url: im.url, alt: im.alt_text, width: im.width, height: im.height });
   }
-  const votes = new Map(all(`SELECT post_id, value FROM post_votes WHERE user_id = ? AND post_id IN (${ph})`, viewer.id, ...ids).map((v) => [v.post_id, v.value]));
-  const rsvps = new Map(all(`SELECT post_id, status FROM event_rsvps WHERE user_id = ? AND post_id IN (${ph})`, viewer.id, ...ids).map((v) => [v.post_id, v.status]));
+  const votes = new Map((await all(`SELECT post_id, value FROM post_votes WHERE user_id = ? AND post_id IN (${ph})`, viewer.id, ...ids)).map((v) => [v.post_id, v.value]));
+  const rsvps = new Map((await all(`SELECT post_id, status FROM event_rsvps WHERE user_id = ? AND post_id IN (${ph})`, viewer.id, ...ids)).map((v) => [v.post_id, v.status]));
   const now = nowIso();
-  return rows.map((r) => {
+  const results = [];
+  for (const r of rows) {
     const communityRole = r.community_id
-      ? get('SELECT role FROM community_members WHERE community_id = ? AND user_id = ?', r.community_id, r.author_id)?.role
+      ? (await get('SELECT role FROM community_members WHERE community_id = ? AND user_id = ?', r.community_id, r.author_id))?.role
       : null;
-    return {
+    results.push({
       id: r.id,
       type: r.type,
       title: r.title,
@@ -121,13 +121,14 @@ export function hydratePosts(rows, viewer) {
       author: { ...miniFrom(r, 'a_'), communityRole: communityRole && communityRole !== 'member' ? communityRole : null },
       community: r.community_id ? { id: r.community_id, slug: r.c_slug, name: r.c_name, type: r.c_type, avatarUrl: r.c_avatar_url } : null,
       images: images.get(r.id) || [],
-    };
-  });
+    });
+  }
+  return results;
 }
 
-export const loadPost = (id, viewer) => {
-  const row = get(`${POST_SELECT} WHERE p.id = ?`, id);
-  return row ? hydratePosts([row], viewer)[0] : null;
+export const loadPost = async (id, viewer) => {
+  const row = await get(`${POST_SELECT} WHERE p.id = ?`, id);
+  return row ? (await hydratePosts([row], viewer))[0] : null;
 };
 
 export function serializeCommunity(c, myRole = null) {

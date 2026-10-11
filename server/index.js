@@ -5,7 +5,7 @@ import express from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import { config } from './config.js';
-import { db, all, run, nowIso } from './db/index.js';
+import { pool, all, run, nowIso, migrate } from './db/index.js';
 import { requireAuth, requireAdmin } from './middleware/auth.js';
 import { errorHandler, HttpError } from './middleware/errors.js';
 import { makeRouter } from './middleware/router.js';
@@ -47,7 +47,6 @@ export function createApp() {
   app.use(express.json({ limit: '100kb' }));
   app.use(cookieParser());
 
-  // CSRF defense: state-changing requests must come from our own origin.
   app.use((req, res, next) => {
     if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
     const origin = req.get('origin');
@@ -75,15 +74,15 @@ export function createApp() {
   }
 
   const api = makeRouter();
-  api.get('/health', (req, res) => {
-    db.prepare('SELECT 1').get();
+  api.get('/health', async (req, res) => {
+    await pool.query('SELECT 1');
     res.json({ ok: true, db: 'ok', uptime: Math.round(process.uptime()) });
   });
-  api.get('/meta', (req, res) => {
+  api.get('/meta', async (req, res) => {
     res.json({
       allowedDomain: config.allowedDomain,
       maxUploadMb: config.maxUploadMb,
-      departments: all('SELECT id, code, name, school FROM departments ORDER BY name'),
+      departments: await all('SELECT id, code, name, school FROM departments ORDER BY name'),
       programs: reference.programs,
       designations: reference.designations,
       subjectTags: reference.subjectTags,
@@ -113,7 +112,6 @@ export function createApp() {
     }),
   );
 
-  // Serves the built PWA when present, so one process can run the whole app.
   if (fs.existsSync(config.clientDist)) {
     app.use(
       express.static(config.clientDist, {
@@ -132,22 +130,25 @@ export function createApp() {
   return app;
 }
 
-function housekeeping() {
-  purgeOldOtps();
-  run('DELETE FROM notifications WHERE read_at IS NOT NULL AND read_at < ?', new Date(Date.now() - 90 * 86_400_000).toISOString());
-  run("UPDATE posts SET is_pinned = 0 WHERE is_pinned = 1 AND pinned_until IS NOT NULL AND pinned_until < ?", nowIso());
+async function housekeeping() {
+  await purgeOldOtps();
+  await run('DELETE FROM notifications WHERE read_at IS NOT NULL AND read_at < ?', new Date(Date.now() - 90 * 86_400_000).toISOString());
+  await run("UPDATE posts SET is_pinned = 0 WHERE is_pinned = 1 AND pinned_until IS NOT NULL AND pinned_until < ?", nowIso());
 }
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(config.root, 'index.js');
 if (isMain) {
-  const app = createApp();
-  const server = http.createServer(app);
-  attachSocket(server);
-  housekeeping();
-  setInterval(housekeeping, 3_600_000).unref();
-  server.listen(config.port, () => {
-    const users = all('SELECT count(*) AS n FROM users')[0].n;
-    console.log(`Campus Connect API on http://localhost:${config.port} (${users} users, db ${path.basename(config.dbPath)})`);
-    if (!config.smtp.host) console.log('No SMTP configured: sign-up codes will be printed here.');
-  });
+  (async () => {
+    await migrate();
+    const app = createApp();
+    const server = http.createServer(app);
+    attachSocket(server);
+    await housekeeping();
+    setInterval(() => housekeeping().catch(console.error), 3_600_000).unref();
+    server.listen(config.port, async () => {
+      const users = (await all('SELECT count(*) AS n FROM users'))[0].n;
+      console.log(`Campus Connect API on http://localhost:${config.port} (${users} users, PostgreSQL)`);
+      if (!config.smtp.host) console.log('No SMTP configured: sign-up codes will be printed here.');
+    });
+  })();
 }

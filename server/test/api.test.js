@@ -1,11 +1,11 @@
-import { test, before } from 'node:test';
+import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 
 process.env.CC_SKIP_ENV_FILE = '1';
 process.env.CC_QUIET = '1';
-process.env.DB_PATH = ':memory:';
+process.env.DATABASE_URL = process.env.TEST_DATABASE_URL || 'postgresql://localhost:5432/campus_connect_test';
 process.env.UPLOAD_DIR = path.join(os.tmpdir(), `cc-test-uploads-${process.pid}`);
 process.env.JWT_SECRET = 'test-secret-that-is-long-enough-for-hs256-signing';
 process.env.ALLOWED_EMAIL_DOMAIN = 'dypiu.ac.in';
@@ -13,22 +13,27 @@ process.env.ALLOWED_EMAIL_DOMAIN = 'dypiu.ac.in';
 const { default: request } = await import('supertest');
 const { default: bcrypt } = await import('bcryptjs');
 const { default: jwt } = await import('jsonwebtoken');
-const { createApp } = await import('../index.js');
+const { pool, migrate } = await import('../db/index.js');
 const { run, get } = await import('../db/index.js');
+const { createApp } = await import('../index.js');
 const { joinDefaultCommunities } = await import('../services/communities.js');
 const { resetRateLimits } = await import('../middleware/rateLimit.js');
 
+await pool.query('DROP SCHEMA public CASCADE');
+await pool.query('CREATE SCHEMA public');
+await migrate();
+
 const app = createApp();
 const PASSWORD = 'Testing123';
-const hash = bcrypt.hashSync(PASSWORD, 4);
+const hash = await bcrypt.hash(PASSWORD, 4);
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
 
 let deptId;
 let clubId;
 const users = {};
 
-function makeUser(key, fields) {
-  const { id } = run(
+async function makeUser(key, fields) {
+  const { id } = await run(
     `INSERT INTO users (email, password_hash, name, role, status, department_id, program, year, graduation_year, designation, office_location)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     `${key}@dypiu.ac.in`,
@@ -43,8 +48,8 @@ function makeUser(key, fields) {
     fields.role === 'teacher' ? 'Assistant Professor' : null,
     fields.role === 'teacher' ? 'Block A, Room 1' : null,
   );
-  const u = get('SELECT * FROM users WHERE id = ?', id);
-  joinDefaultCommunities(u);
+  const u = await get('SELECT * FROM users WHERE id = ?', id);
+  await joinDefaultCommunities(u);
   users[key] = u;
   return u;
 }
@@ -56,17 +61,21 @@ async function agentFor(key) {
   return agent;
 }
 
-before(() => {
-  deptId = run("INSERT INTO departments (code, name) VALUES ('CSE', 'Computer Science')").id;
-  run("INSERT INTO communities (slug, name, type, department_id) VALUES ('cse', 'CSE Department', 'department', ?)", deptId);
-  run("INSERT INTO communities (slug, name, type, auto_join) VALUES ('dypiu', 'DYPIU Announcements', 'official', 1)");
-  clubId = run("INSERT INTO communities (slug, name, type) VALUES ('gdgc', 'GDGC', 'club')").id;
-  makeUser('student1', { name: 'Student One', role: 'student', year: 1 });
-  makeUser('student3', { name: 'Student Three', role: 'student', year: 3 });
-  makeUser('outsider', { name: 'Third Party', role: 'student', year: 2 });
-  makeUser('teacher', { name: 'Verified Teacher', role: 'teacher' });
-  makeUser('pending', { name: 'Pending Teacher', role: 'teacher', status: 'pending' });
-  run("INSERT INTO community_members (community_id, user_id, role) VALUES (?, ?, 'admin')", clubId, users.student3.id);
+before(async () => {
+  deptId = (await run("INSERT INTO departments (code, name) VALUES ('CSE', 'Computer Science')")).id;
+  await run("INSERT INTO communities (slug, name, type, department_id) VALUES ('cse', 'CSE Department', 'department', ?)", deptId);
+  await run("INSERT INTO communities (slug, name, type, auto_join) VALUES ('dypiu', 'DYPIU Announcements', 'official', 1)");
+  clubId = (await run("INSERT INTO communities (slug, name, type) VALUES ('gdgc', 'GDGC', 'club')")).id;
+  await makeUser('student1', { name: 'Student One', role: 'student', year: 1 });
+  await makeUser('student3', { name: 'Student Three', role: 'student', year: 3 });
+  await makeUser('outsider', { name: 'Third Party', role: 'student', year: 2 });
+  await makeUser('teacher', { name: 'Verified Teacher', role: 'teacher' });
+  await makeUser('pending', { name: 'Pending Teacher', role: 'teacher', status: 'pending' });
+  await run("INSERT INTO community_members (community_id, user_id, role) VALUES (?, ?, 'admin')", clubId, users.student3.id);
+});
+
+after(async () => {
+  await pool.end();
 });
 
 test('registration only accepts the college domain', async () => {
@@ -96,10 +105,10 @@ test('register with a verified email auto-joins department and official communit
     .send({ registrationToken: token, name: 'Fresh Student', password: 'Fresh2026', role: 'student', departmentId: deptId, program: 'B.Tech', year: 1 });
   assert.equal(r.status, 201);
   assert.ok(r.headers['set-cookie'][0].includes('HttpOnly'));
-  const slugs = get(
-    "SELECT group_concat(c.slug) AS s FROM community_members m JOIN communities c ON c.id = m.community_id WHERE m.user_id = ?",
+  const slugs = (await get(
+    "SELECT string_agg(c.slug, ',') AS s FROM community_members m JOIN communities c ON c.id = m.community_id WHERE m.user_id = ?",
     r.body.user.id,
-  ).s;
+  )).s;
   assert.match(slugs, /cse/);
   assert.match(slugs, /dypiu/);
   assert.match(slugs, /cse-\d{4}/);
@@ -126,7 +135,7 @@ test('campus announcement permissions follow the matrix', async () => {
   r = await teacher.post('/api/posts').field('type', 'announcement').field('title', 'Lab moved').field('pinned', 'true');
   assert.equal(r.status, 201);
   assert.equal(r.body.post.isPinned, true);
-  const notified = get("SELECT count(*) AS n FROM notifications WHERE type = 'announcement' AND post_id = ?", r.body.post.id).n;
+  const notified = (await get("SELECT count(*) AS n FROM notifications WHERE type = 'announcement' AND post_id = ?", r.body.post.id)).n;
   assert.ok(notified >= 4);
 });
 
@@ -192,7 +201,7 @@ test('direct messages are private, idempotent, and respect blocks', async () => 
 
 test('directory finds faculty by cabin and hides pending faculty', async () => {
   const { reindexUser } = await import('../services/search.js');
-  Object.values(users).forEach((u) => reindexUser(u.id));
+  for (const u of Object.values(users)) await reindexUser(u.id);
   const s = await agentFor('student1');
   const byCabin = await s.get('/api/users?q=Block A');
   assert.ok(byCabin.body.items.some((u) => u.id === users.teacher.id));
@@ -203,7 +212,7 @@ test('directory finds faculty by cabin and hides pending faculty', async () => {
 test('admin routes are admin only and approvals unlock announcements', async () => {
   const s = await agentFor('student1');
   assert.equal((await s.get('/api/admin/stats')).status, 403);
-  makeUser('admin1', { name: 'Admin', role: 'admin' });
+  await makeUser('admin1', { name: 'Admin', role: 'admin' });
   const admin = await agentFor('admin1');
   const pending = await admin.get('/api/admin/teachers/pending');
   assert.ok(pending.body.items.some((u) => u.id === users.pending.id));

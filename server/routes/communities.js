@@ -13,8 +13,8 @@ import { ftsQuery } from '../services/search.js';
 const r = makeRouter();
 const TYPES = ['official', 'department', 'batch', 'club', 'interest'];
 
-function loadBySlug(slug, user, { allowPending = false } = {}) {
-  const c = get('SELECT * FROM communities WHERE slug = ?', String(slug || '').toLowerCase());
+async function loadBySlug(slug, user, { allowPending = false } = {}) {
+  const c = await get('SELECT * FROM communities WHERE slug = ?', String(slug || '').toLowerCase());
   if (!c) throw notFound('Community not found.');
   if (c.status !== 'active' && !(allowPending && (isAdmin(user) || c.created_by === user.id))) {
     throw notFound('Community not found.');
@@ -22,7 +22,7 @@ function loadBySlug(slug, user, { allowPending = false } = {}) {
   return c;
 }
 
-r.get('/', (req, res) => {
+r.get('/', async (req, res) => {
   const q = parse(
     z.object({ type: z.enum(TYPES).optional().catch(undefined), q: optStr(60), mine: z.string().optional() }),
     req.query,
@@ -34,12 +34,12 @@ r.get('/', (req, res) => {
     params.push(q.type);
   }
   if (q.q) {
-    where.push('(c.name LIKE ? OR c.description LIKE ? OR c.slug LIKE ?)');
+    where.push('(c.name ILIKE ? OR c.description ILIKE ? OR c.slug ILIKE ?)');
     const like = `%${q.q.replace(/[%_]/g, '')}%`;
     params.push(like, like, like);
   }
   if (q.mine === '1') where.push('m.role IS NOT NULL');
-  const rows = all(
+  const rows = await all(
     `SELECT c.*, m.role AS my_role FROM communities c
      LEFT JOIN community_members m ON m.community_id = c.id AND m.user_id = ?
      WHERE ${where.join(' AND ')}
@@ -59,21 +59,21 @@ const createSchema = z.object({
   rules: optStr(2000),
 });
 
-r.get('/slug-available', (req, res) => {
+r.get('/slug-available', async (req, res) => {
   const slug = String(req.query.slug || '').toLowerCase();
-  res.json({ available: slugRe.test(slug) && !get('SELECT 1 FROM communities WHERE slug = ?', slug) });
+  res.json({ available: slugRe.test(slug) && !(await get('SELECT 1 FROM communities WHERE slug = ?', slug)) });
 });
 
-r.post('/', limit('community-create', 5, 24 * HOUR), uploadFields(['avatar', 'cover']), (req, res) => {
+r.post('/', limit('community-create', 5, 24 * HOUR), uploadFields(['avatar', 'cover']), async (req, res) => {
   const b = parse(createSchema, req.body);
-  if (get('SELECT 1 FROM communities WHERE slug = ?', b.slug)) {
+  if (await get('SELECT 1 FROM communities WHERE slug = ?', b.slug)) {
     throw new HttpError(409, 'SLUG_TAKEN', 'That web address is taken. Try another.', { fields: { slug: 'Already taken' } });
   }
   const direct = isAdmin(req.user) || isVerifiedTeacher(req.user);
   const avatar = req.files?.avatar?.[0] ? saveImage(req, req.files.avatar[0], 'communities') : null;
   const cover = req.files?.cover?.[0] ? saveImage(req, req.files.cover[0], 'communities') : null;
-  const id = tx(() => {
-    const { id } = run(
+  const id = await tx(async () => {
+    const { id } = await run(
       `INSERT INTO communities (slug, name, description, rules, type, avatar_url, cover_url, status, created_by)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       b.slug,
@@ -86,33 +86,33 @@ r.post('/', limit('community-create', 5, 24 * HOUR), uploadFields(['avatar', 'co
       direct ? 'active' : 'pending',
       req.user.id,
     );
-    if (direct) joinCommunity(id, req.user.id, 'admin');
+    if (direct) await joinCommunity(id, req.user.id, 'admin');
     return id;
   });
   keepUploads(req);
-  const c = get('SELECT * FROM communities WHERE id = ?', id);
+  const c = await get('SELECT * FROM communities WHERE id = ?', id);
   res.status(201).json({ community: serializeCommunity(c, direct ? 'admin' : null), pending: !direct });
 });
 
-r.get('/:slug', (req, res) => {
-  const c = loadBySlug(req.params.slug, req.user, { allowPending: true });
-  const leaders = all(
+r.get('/:slug', async (req, res) => {
+  const c = await loadBySlug(req.params.slug, req.user, { allowPending: true });
+  const leaders = (await all(
     `SELECT m.role AS member_role, ${miniCols('u', 'd', 'x_')}
      FROM community_members m JOIN users u ON u.id = m.user_id LEFT JOIN departments d ON d.id = u.department_id
      WHERE m.community_id = ? AND m.role <> 'member'
      ORDER BY CASE m.role WHEN 'admin' THEN 0 ELSE 1 END, u.name`,
     c.id,
-  ).map((row) => ({ ...miniFrom(row, 'x_'), communityRole: row.member_role }));
-  res.json({ community: serializeCommunity(c, memberRole(c.id, req.user.id)), leaders, canManage: isCommunityAdmin(c.id, req.user) });
+  )).map((row) => ({ ...miniFrom(row, 'x_'), communityRole: row.member_role }));
+  res.json({ community: serializeCommunity(c, await memberRole(c.id, req.user.id)), leaders, canManage: await isCommunityAdmin(c.id, req.user) });
 });
 
-r.patch('/:slug', uploadFields(['avatar', 'cover']), (req, res) => {
-  const c = loadBySlug(req.params.slug, req.user);
-  if (!isCommunityAdmin(c.id, req.user)) throw forbidden();
+r.patch('/:slug', uploadFields(['avatar', 'cover']), async (req, res) => {
+  const c = await loadBySlug(req.params.slug, req.user);
+  if (!(await isCommunityAdmin(c.id, req.user))) throw forbidden();
   const b = parse(z.object({ name: str(2, 60), description: optStr(500), rules: optStr(2000) }), req.body);
   const avatar = req.files?.avatar?.[0] ? saveImage(req, req.files.avatar[0], 'communities') : null;
   const cover = req.files?.cover?.[0] ? saveImage(req, req.files.cover[0], 'communities') : null;
-  run(
+  await run(
     `UPDATE communities SET name = ?, description = ?, rules = ?, avatar_url = coalesce(?, avatar_url),
        cover_url = coalesce(?, cover_url), updated_at = ? WHERE id = ?`,
     b.name,
@@ -126,40 +126,40 @@ r.patch('/:slug', uploadFields(['avatar', 'cover']), (req, res) => {
   keepUploads(req);
   if (avatar) removeUpload(c.avatar_url);
   if (cover) removeUpload(c.cover_url);
-  const updated = get('SELECT * FROM communities WHERE id = ?', c.id);
-  res.json({ community: serializeCommunity(updated, memberRole(c.id, req.user.id)) });
+  const updated = await get('SELECT * FROM communities WHERE id = ?', c.id);
+  res.json({ community: serializeCommunity(updated, await memberRole(c.id, req.user.id)) });
 });
 
-r.post('/:slug/join', (req, res) => {
-  const c = loadBySlug(req.params.slug, req.user);
-  if (!joinCommunity(c.id, req.user.id)) throw new HttpError(409, 'ALREADY_MEMBER', "You're already a member.");
-  res.json({ memberCount: get('SELECT member_count FROM communities WHERE id = ?', c.id).member_count, myRole: 'member' });
+r.post('/:slug/join', async (req, res) => {
+  const c = await loadBySlug(req.params.slug, req.user);
+  if (!(await joinCommunity(c.id, req.user.id))) throw new HttpError(409, 'ALREADY_MEMBER', "You're already a member.");
+  res.json({ memberCount: (await get('SELECT member_count FROM communities WHERE id = ?', c.id)).member_count, myRole: 'member' });
 });
 
-r.post('/:slug/leave', (req, res) => {
-  const c = loadBySlug(req.params.slug, req.user);
+r.post('/:slug/leave', async (req, res) => {
+  const c = await loadBySlug(req.params.slug, req.user);
   if (c.type === 'official') throw badRequest("Official communities can't be left. They carry campus announcements.");
-  const role = memberRole(c.id, req.user.id);
+  const role = await memberRole(c.id, req.user.id);
   if (role === 'admin') {
-    const admins = get("SELECT count(*) AS n FROM community_members WHERE community_id = ? AND role = 'admin'", c.id).n;
+    const admins = (await get("SELECT count(*) AS n FROM community_members WHERE community_id = ? AND role = 'admin'", c.id)).n;
     if (admins <= 1) throw badRequest('Make someone else an admin before you leave.');
   }
-  leaveCommunity(c.id, req.user.id);
-  res.json({ memberCount: get('SELECT member_count FROM communities WHERE id = ?', c.id).member_count, myRole: null });
+  await leaveCommunity(c.id, req.user.id);
+  res.json({ memberCount: (await get('SELECT member_count FROM communities WHERE id = ?', c.id)).member_count, myRole: null });
 });
 
-r.get('/:slug/members', (req, res) => {
-  const c = loadBySlug(req.params.slug, req.user);
+r.get('/:slug/members', async (req, res) => {
+  const c = await loadBySlug(req.params.slug, req.user);
   const q = parse(z.object({ q: optStr(60), offset: optInt(0, 1e6) }), req.query);
   const offset = q.offset || 0;
   const params = [c.id];
   let filter = '';
   const fts = ftsQuery(q.q);
   if (fts) {
-    filter = 'AND u.id IN (SELECT rowid FROM users_fts WHERE users_fts MATCH ?)';
+    filter = "AND u.search_vector @@ to_tsquery('simple', ?)";
     params.push(fts);
   }
-  const rows = all(
+  const rows = await all(
     `SELECT m.role AS member_role, ${miniCols('u', 'd', 'x_')}
      FROM community_members m JOIN users u ON u.id = m.user_id LEFT JOIN departments d ON d.id = u.department_id
      WHERE m.community_id = ? AND u.status <> 'suspended' ${filter}
@@ -174,27 +174,27 @@ r.get('/:slug/members', (req, res) => {
   });
 });
 
-r.patch('/:slug/members/:userId', (req, res) => {
-  const c = loadBySlug(req.params.slug, req.user);
-  if (!isCommunityAdmin(c.id, req.user)) throw forbidden();
+r.patch('/:slug/members/:userId', async (req, res) => {
+  const c = await loadBySlug(req.params.slug, req.user);
+  if (!(await isCommunityAdmin(c.id, req.user))) throw forbidden();
   const { role } = parse(z.object({ role: z.enum(['member', 'moderator', 'admin']) }), req.body);
   const userId = Number(req.params.userId);
-  const current = memberRole(c.id, userId);
+  const current = await memberRole(c.id, userId);
   if (!current) throw notFound('That person is not a member.');
   if (current === 'admin' && role !== 'admin') {
-    const admins = get("SELECT count(*) AS n FROM community_members WHERE community_id = ? AND role = 'admin'", c.id).n;
+    const admins = (await get("SELECT count(*) AS n FROM community_members WHERE community_id = ? AND role = 'admin'", c.id)).n;
     if (admins <= 1) throw badRequest('A community needs at least one admin.');
   }
-  run('UPDATE community_members SET role = ? WHERE community_id = ? AND user_id = ?', role, c.id, userId);
+  await run('UPDATE community_members SET role = ? WHERE community_id = ? AND user_id = ?', role, c.id, userId);
   res.status(204).end();
 });
 
-r.delete('/:slug/members/:userId', (req, res) => {
-  const c = loadBySlug(req.params.slug, req.user);
-  if (!isCommunityAdmin(c.id, req.user)) throw forbidden();
+r.delete('/:slug/members/:userId', async (req, res) => {
+  const c = await loadBySlug(req.params.slug, req.user);
+  if (!(await isCommunityAdmin(c.id, req.user))) throw forbidden();
   const userId = Number(req.params.userId);
-  if (memberRole(c.id, userId) === 'admin') throw badRequest('Change their role before removing an admin.');
-  leaveCommunity(c.id, userId);
+  if ((await memberRole(c.id, userId)) === 'admin') throw badRequest('Change their role before removing an admin.');
+  await leaveCommunity(c.id, userId);
   res.status(204).end();
 });
 

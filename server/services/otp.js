@@ -27,7 +27,7 @@ async function sendOtp(email, code, purpose) {
 const hash = (email, code) => crypto.createHash('sha256').update(`${code}:${email}:${config.jwtSecret}`).digest('hex');
 
 export async function issueOtp(email, purpose, ip) {
-  const recent = all(
+  const recent = await all(
     'SELECT created_at FROM email_otps WHERE email = ? AND purpose = ? AND created_at > ? ORDER BY created_at DESC',
     email,
     purpose,
@@ -46,8 +46,8 @@ export async function issueOtp(email, purpose, ip) {
   hit(`otp-ip:${ip}`, 20, HOUR);
 
   const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
-  run('UPDATE email_otps SET consumed_at = ? WHERE email = ? AND purpose = ? AND consumed_at IS NULL', nowIso(), email, purpose);
-  run(
+  await run('UPDATE email_otps SET consumed_at = ? WHERE email = ? AND purpose = ? AND consumed_at IS NULL', nowIso(), email, purpose);
+  await run(
     'INSERT INTO email_otps (email, purpose, code_hash, expires_at, request_ip) VALUES (?, ?, ?, ?, ?)',
     email,
     purpose,
@@ -59,8 +59,8 @@ export async function issueOtp(email, purpose, ip) {
   return code;
 }
 
-export function verifyOtp(email, purpose, code) {
-  const row = get(
+export async function verifyOtp(email, purpose, code) {
+  const row = await get(
     'SELECT * FROM email_otps WHERE email = ? AND purpose = ? AND consumed_at IS NULL ORDER BY id DESC LIMIT 1',
     email,
     purpose,
@@ -71,16 +71,16 @@ export function verifyOtp(email, purpose, code) {
 
   const given = Buffer.from(hash(email, String(code || '').trim()), 'hex');
   if (!crypto.timingSafeEqual(given, Buffer.from(row.code_hash, 'hex'))) {
-    run('UPDATE email_otps SET attempts = attempts + 1 WHERE id = ?', row.id);
+    await run('UPDATE email_otps SET attempts = attempts + 1 WHERE id = ?', row.id);
     const left = 4 - row.attempts;
     if (left <= 0) throw new HttpError(400, 'OTP_LOCKED', 'Too many wrong tries. Request a new code.');
     throw new HttpError(400, 'OTP_INVALID', `That code is not right. ${left} ${left === 1 ? 'try' : 'tries'} left.`, {
       triesLeft: left,
     });
   }
-  run('UPDATE email_otps SET consumed_at = ? WHERE id = ?', nowIso(), row.id);
+  await run('UPDATE email_otps SET consumed_at = ? WHERE id = ?', nowIso(), row.id);
 }
 
-export function purgeOldOtps() {
-  run('DELETE FROM email_otps WHERE created_at < ?', new Date(Date.now() - 24 * HOUR).toISOString());
+export async function purgeOldOtps() {
+  await run('DELETE FROM email_otps WHERE created_at < ?', new Date(Date.now() - 24 * HOUR).toISOString());
 }

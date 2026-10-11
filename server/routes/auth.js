@@ -18,8 +18,8 @@ import { permissionsFor } from '../services/permissions.js';
 const r = makeRouter();
 const PURPOSES = ['register', 'reset_password'];
 
-export function unreadCounts(userId) {
-  const messages = get(
+export async function unreadCounts(userId) {
+  const messages = (await get(
     `SELECT count(*) AS n FROM messages m
      JOIN conversations cv ON cv.id = m.conversation_id
      WHERE (cv.user_a_id = ? OR cv.user_b_id = ?) AND m.sender_id <> ? AND m.deleted_at IS NULL
@@ -28,15 +28,15 @@ export function unreadCounts(userId) {
     userId,
     userId,
     userId,
-  ).n;
-  const notifications = get('SELECT count(*) AS n FROM notifications WHERE user_id = ? AND read_at IS NULL', userId).n;
+  )).n;
+  const notifications = (await get('SELECT count(*) AS n FROM notifications WHERE user_id = ? AND read_at IS NULL', userId)).n;
   return { messages, notifications };
 }
 
-export const mePayload = (user) => ({
-  user: userProfile(user, user),
-  permissions: permissionsFor(user),
-  unread: unreadCounts(user.id),
+export const mePayload = async (user) => ({
+  user: await userProfile(user, user),
+  permissions: await permissionsFor(user),
+  unread: await unreadCounts(user.id),
 });
 
 const domainError = () =>
@@ -48,25 +48,24 @@ r.post('/otp/request', async (req, res) => {
   const body = parse(z.object({ email: z.string(), purpose: z.enum(PURPOSES).default('register') }), req.body);
   const email = normalizeEmail(body.email);
   if (!EMAIL_RE.test(email)) throw domainError();
-  const existing = get('SELECT id FROM users WHERE email = ?', email);
+  const existing = await get('SELECT id FROM users WHERE email = ?', email);
   if (body.purpose === 'register' && existing) {
     throw new HttpError(409, 'EMAIL_TAKEN', 'You already have an account. Log in instead.');
   }
   if (body.purpose === 'reset_password' && !existing) return res.status(204).end();
   const code = await issueOtp(email, body.purpose, req.ip);
-  // Without a mail server the code can't reach the inbox, so local builds hand it to the UI instead.
   if (!config.smtp.host && !config.isProd) return res.json({ devCode: code });
   res.status(204).end();
 });
 
-r.post('/otp/verify', (req, res) => {
+r.post('/otp/verify', async (req, res) => {
   const body = parse(
     z.object({ email: z.string(), code: z.string(), purpose: z.enum(PURPOSES).default('register') }),
     req.body,
   );
   const email = normalizeEmail(body.email);
   hit(`otp-verify:${req.ip}`, 10, 15 * MIN);
-  verifyOtp(email, body.purpose, body.code);
+  await verifyOtp(email, body.purpose, body.code);
   const token = jwt.sign({ email, purpose: body.purpose }, config.jwtSecret, { expiresIn: '15m' });
   res.json(body.purpose === 'register' ? { registrationToken: token } : { resetToken: token });
 });
@@ -104,10 +103,10 @@ function readToken(token, purpose) {
 r.post('/register', async (req, res) => {
   const b = parse(registerSchema, req.body);
   const { email } = readToken(b.registrationToken, 'register');
-  if (get('SELECT id FROM users WHERE email = ?', email)) {
+  if (await get('SELECT id FROM users WHERE email = ?', email)) {
     throw new HttpError(409, 'EMAIL_TAKEN', 'You already have an account. Log in instead.');
   }
-  if (!get('SELECT id FROM departments WHERE id = ?', b.departmentId)) {
+  if (!(await get('SELECT id FROM departments WHERE id = ?', b.departmentId))) {
     throw badRequest('Choose your department.', { departmentId: 'Choose your department' });
   }
   const student = b.role === 'student';
@@ -118,8 +117,8 @@ r.post('/register', async (req, res) => {
   }
   const hash = await bcrypt.hash(b.password, 10);
   const role = config.adminEmails.includes(email) ? 'admin' : b.role;
-  const user = tx(() => {
-    const { id } = run(
+  const user = await tx(async () => {
+    const { id } = await run(
       `INSERT INTO users (email, password_hash, name, role, status, department_id, program, year, section,
          graduation_year, designation, office_location, office_hours)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -137,25 +136,25 @@ r.post('/register', async (req, res) => {
       student ? null : b.officeLocation,
       student ? null : b.officeHours,
     );
-    const u = get('SELECT * FROM users WHERE id = ?', id);
-    joinDefaultCommunities(u);
-    reindexUser(id);
+    const u = await get('SELECT * FROM users WHERE id = ?', id);
+    await joinDefaultCommunities(u);
+    await reindexUser(id);
     return u;
   });
   setSessionCookie(res, user);
-  res.status(201).json(mePayload(user));
+  res.status(201).json(await mePayload(user));
 });
 
 r.post('/login', async (req, res) => {
   const b = parse(z.object({ email: z.string(), password: z.string() }), req.body);
   const email = normalizeEmail(b.email);
   hit(`login:${req.ip}:${email}`, 10, 15 * MIN);
-  const user = get('SELECT * FROM users WHERE email = ?', email);
+  const user = await get('SELECT * FROM users WHERE email = ?', email);
   const ok = user && (await bcrypt.compare(b.password, user.password_hash));
   if (!ok) throw new HttpError(401, 'INVALID_CREDENTIALS', 'Email or password is incorrect.');
-  checkSuspension(user);
+  await checkSuspension(user);
   setSessionCookie(res, user);
-  res.json(mePayload(user));
+  res.json(await mePayload(user));
 });
 
 r.post('/logout', (req, res) => {
@@ -163,15 +162,15 @@ r.post('/logout', (req, res) => {
   res.status(204).end();
 });
 
-r.get('/me', requireAuth, (req, res) => res.json(mePayload(req.user)));
+r.get('/me', requireAuth, async (req, res) => res.json(await mePayload(req.user)));
 
-r.get('/unread', requireAuth, (req, res) => res.json(unreadCounts(req.user.id)));
+r.get('/unread', requireAuth, async (req, res) => res.json(await unreadCounts(req.user.id)));
 
 r.post('/password/reset', async (req, res) => {
   const b = parse(z.object({ resetToken: z.string(), newPassword: password }), req.body);
   const { email } = readToken(b.resetToken, 'reset_password');
   const hash = await bcrypt.hash(b.newPassword, 10);
-  run('UPDATE users SET password_hash = ?, updated_at = ? WHERE email = ?', hash, new Date().toISOString(), email);
+  await run('UPDATE users SET password_hash = ?, updated_at = ? WHERE email = ?', hash, new Date().toISOString(), email);
   res.status(204).end();
 });
 
@@ -182,7 +181,7 @@ r.post('/password/change', requireAuth, async (req, res) => {
     throw badRequest('Your current password is not right.', { currentPassword: 'Not right' });
   }
   const hash = await bcrypt.hash(b.newPassword, 10);
-  run('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?', hash, new Date().toISOString(), req.user.id);
+  await run('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?', hash, new Date().toISOString(), req.user.id);
   res.status(204).end();
 });
 
