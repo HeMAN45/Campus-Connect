@@ -4,7 +4,9 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const envFile = path.join(root, '.env');
-if (fs.existsSync(envFile) && !process.env.CC_SKIP_ENV_FILE) process.loadEnvFile(envFile);
+if (fs.existsSync(envFile) && !process.env.CC_SKIP_ENV_FILE && typeof process.loadEnvFile === 'function') {
+  process.loadEnvFile(envFile);
+}
 
 const env = process.env;
 const isProd = env.NODE_ENV === 'production';
@@ -28,7 +30,7 @@ export const config = {
   sessionDays: Number(env.SESSION_DAYS || 7),
   allowedDomain: (env.ALLOWED_EMAIL_DOMAIN || 'dypiu.ac.in').toLowerCase(),
   databaseUrl: env.DATABASE_URL || 'postgresql://localhost:5432/campus_connect',
-  uploadDir: env.UPLOAD_DIR ? path.resolve(root, env.UPLOAD_DIR) : path.resolve(root, './uploads'),
+  uploadDir: env.UPLOAD_DIR ? path.resolve(root, env.UPLOAD_DIR) : (env.VERCEL ? '/tmp/uploads' : path.resolve(root, './uploads')),
   maxUploadMb: Number(env.MAX_UPLOAD_MB || 5),
   clientOrigin: env.CLIENT_ORIGIN || 'http://localhost:5173',
   clientDist: path.resolve(root, '../client/dist'),
