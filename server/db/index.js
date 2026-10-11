@@ -78,6 +78,7 @@ export async function migrate() {
     applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`);
   const dir = path.join(config.root, 'db', 'migrations');
+  if (!fs.existsSync(dir)) return;
   const { rows } = await pool.query('SELECT version FROM schema_migrations');
   const done = new Set(rows.map((r) => r.version));
   for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.sql')).sort()) {
