@@ -135,8 +135,6 @@ CREATE INDEX idx_posts_pinned    ON posts(is_pinned, pinned_until) WHERE is_pinn
 CREATE INDEX idx_posts_subject   ON posts(subject_tag) WHERE type = 'doubt';
 CREATE INDEX idx_posts_fts       ON posts USING GIN(search_vector);
 
-ALTER TABLE posts ADD CONSTRAINT fk_accepted_comment FOREIGN KEY (accepted_comment_id) REFERENCES comments(id) ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED;
-
 CREATE TABLE post_images (
   id          SERIAL PRIMARY KEY,
   post_id     INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
@@ -175,6 +173,7 @@ CREATE TABLE comments (
   CHECK (length(body) > 0 OR image_url IS NOT NULL),
   CHECK ((parent_id IS NULL AND depth = 0) OR (parent_id IS NOT NULL AND depth = 1))
 );
+ALTER TABLE posts ADD CONSTRAINT fk_accepted_comment FOREIGN KEY (accepted_comment_id) REFERENCES comments(id) ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED;
 CREATE INDEX idx_comments_post   ON comments(post_id, created_at);
 CREATE INDEX idx_comments_author ON comments(author_id, created_at DESC);
 CREATE INDEX idx_comments_parent ON comments(parent_id);
