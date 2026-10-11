@@ -1,0 +1,9 @@
+[
+  { "post": "ev-gdgc-ai", "going": 26, "interested": 11, "include": ["rohan", "riya", "kabir"] },
+  { "post": "ev-gdgc-jam", "going": 14, "interested": 6, "include": ["ishita"] },
+  { "post": "ev-robotics", "going": 21, "interested": 9, "include": ["aarav", "neha"] },
+  { "post": "ev-photowalk", "going": 9, "interested": 5, "include": ["riya"] },
+  { "post": "ev-cp-contest", "going": 12, "interested": 4, "include": ["kabir", "vikram"] },
+  { "post": "ev-gdgc-intro", "going": 18, "interested": 3 },
+  { "post": "ev-robotics-ws", "going": 15, "interested": 2 }
+]

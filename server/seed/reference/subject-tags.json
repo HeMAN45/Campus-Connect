@@ -1,0 +1,13 @@
+{
+  "_common": ["Maths", "Physics", "Communication Skills", "Environmental Studies"],
+  "CSE": ["DSA", "DBMS", "OS", "CN", "TOC", "Compiler Design", "OOP", "Java", "Python", "Web Dev"],
+  "AIML": ["DSA", "DBMS", "Machine Learning", "Deep Learning", "NLP", "Computer Vision", "Probability", "Linear Algebra", "Python"],
+  "DS": ["Statistics", "Machine Learning", "Big Data", "SQL", "Data Visualization", "Python"],
+  "IT": ["DSA", "DBMS", "CN", "Cloud Computing", "Web Dev", "Java"],
+  "ENTC": ["Signals and Systems", "Digital Electronics", "Microprocessors", "VLSI", "Communication Systems"],
+  "MECH": ["Thermodynamics", "Fluid Mechanics", "SOM", "Machine Design", "Manufacturing"],
+  "CIVIL": ["Structural Analysis", "Surveying", "Geotechnical Engineering", "Concrete Technology"],
+  "BCA": ["C Programming", "Java", "DBMS", "Web Dev", "Networking"],
+  "MGMT": ["Marketing", "Finance", "HR", "Economics", "Business Analytics"],
+  "DES": ["Typography", "UX Research", "Visual Design", "Design History"]
+}

@@ -1,0 +1,11 @@
+[
+  { "slug": "dypiu", "name": "DYPIU Announcements", "type": "official", "autoJoin": true, "description": "Official campus-wide updates from the university and verified faculty.", "rules": "Only moderators and verified faculty post here. Comments are welcome; keep them on topic.", "admins": ["admin"], "moderators": [] },
+  { "slug": "placements", "name": "Placement Cell", "type": "official", "autoJoin": true, "description": "Placement drives, pre-placement talks, internship openings, and preparation resources.", "rules": "Posts by the Placement Cell only. Ask questions in the comments.", "admins": ["admin"], "moderators": ["meghna"] },
+  { "slug": "help", "name": "Campus Connect Help", "type": "official", "autoJoin": true, "description": "How to use Campus Connect, feature requests, and feedback.", "admins": ["admin"], "moderators": [] },
+
+  { "slug": "gdgc", "name": "GDGC DYPIU", "type": "club", "description": "Google Developer Groups on Campus. Workshops, study jams, and hackathons for every branch and year.", "rules": "Be kind. No spam. Event posts by club leads only.", "admins": ["sneha"], "moderators": ["vkapoor"] },
+  { "slug": "robotics", "name": "Robotics Club", "type": "club", "description": "Build robots, compete, and learn electronics, CAD, and control systems together.", "rules": "Return borrowed components. Safety first in the lab.", "admins": ["arjun"], "moderators": ["nshah", "neha"] },
+  { "slug": "photography", "name": "Photography Club", "type": "club", "description": "Photo walks, editing sessions, and covering campus events.", "rules": "Credit the photographer when you share.", "admins": ["tanvi"], "moderators": [] },
+  { "slug": "cp", "name": "Competitive Programming", "type": "interest", "description": "Weekly contests, upsolving sessions, and interview prep.", "rules": "No posting solutions to live contests.", "admins": ["rohan"], "moderators": ["vkapoor"] },
+  { "slug": "sports", "name": "Sports and Fitness", "type": "interest", "description": "Football, cricket, badminton, and gym buddies.", "admins": ["kabir"], "moderators": [] }
+]

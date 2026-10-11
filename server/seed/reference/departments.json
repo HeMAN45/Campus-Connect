@@ -1,0 +1,12 @@
+[
+  { "code": "CSE", "name": "Computer Science and Engineering", "school": "School of Computer Science and Engineering" },
+  { "code": "AIML", "name": "Artificial Intelligence and Machine Learning", "school": "School of Computer Science and Engineering" },
+  { "code": "DS", "name": "Data Science", "school": "School of Computer Science and Engineering" },
+  { "code": "IT", "name": "Information Technology", "school": "School of Computer Science and Engineering" },
+  { "code": "ENTC", "name": "Electronics and Telecommunication", "school": "School of Engineering" },
+  { "code": "MECH", "name": "Mechanical Engineering", "school": "School of Engineering" },
+  { "code": "CIVIL", "name": "Civil Engineering", "school": "School of Engineering" },
+  { "code": "BCA", "name": "Computer Applications", "school": "School of Computer Applications" },
+  { "code": "MGMT", "name": "Management", "school": "School of Management" },
+  { "code": "DES", "name": "Design", "school": "School of Design" }
+]

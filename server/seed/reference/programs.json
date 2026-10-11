@@ -1,0 +1,10 @@
+[
+  { "code": "BTECH", "name": "B.Tech", "years": 4 },
+  { "code": "MTECH", "name": "M.Tech", "years": 2 },
+  { "code": "BCA", "name": "BCA", "years": 3 },
+  { "code": "MCA", "name": "MCA", "years": 2 },
+  { "code": "BBA", "name": "BBA", "years": 3 },
+  { "code": "MBA", "name": "MBA", "years": 2 },
+  { "code": "BDES", "name": "B.Des", "years": 4 },
+  { "code": "PHD", "name": "Ph.D", "years": 5 }
+]

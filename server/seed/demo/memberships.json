@@ -1,0 +1,7 @@
+[
+  { "community": "gdgc", "users": ["rohan", "riya", "ishita", "kabir", "vikram", "meghna"], "random": 14 },
+  { "community": "robotics", "users": ["aarav", "neha", "vikram"], "random": 9 },
+  { "community": "photography", "users": ["riya", "ishita", "sneha"], "random": 7 },
+  { "community": "cp", "users": ["sneha", "kabir", "vikram", "ishita"], "random": 10 },
+  { "community": "sports", "users": ["aarav", "arjun", "vikram", "rohan"], "random": 11 }
+]
